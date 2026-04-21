@@ -1,0 +1,26 @@
+version: "3.9"
+
+services:
+  dora-api:
+    build: .
+    container_name: dora-risk-scorer
+    ports:
+      - "8000:8000"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - DB_PATH=/app/data/dora.db
+    volumes:
+      # Persist SQLite DB across container restarts
+      - dora-data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  dora-data:
+    driver: local

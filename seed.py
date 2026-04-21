@@ -73,6 +73,8 @@ SEED_DEPLOYS = [
 
 
 def seed():
+    init_db()  # always create tables first before any query
+
     existing = count_outcomes()
     if existing > 0:
         print(f"Database already has {existing} deploy outcomes. Skipping seed.")

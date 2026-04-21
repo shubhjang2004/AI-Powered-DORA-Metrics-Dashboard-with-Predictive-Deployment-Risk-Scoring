@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Job 1: run tests ──────────────────────────────────
+  test:
+    name: Test (Python 3.11)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Seed demo deploy history
+        run: python seed.py
+
+      - name: Start API server in background
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          uvicorn main:app --host 0.0.0.0 --port 8000 &
+          sleep 5  # wait for startup
+
+      - name: Check /health endpoint
+        run: |
+          curl -f http://localhost:8000/health | python -m json.tool
+
+      - name: Run test scenarios (LOW / MEDIUM / HIGH / CRITICAL)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python test_score.py
+
+  # ── Job 2: Docker build check ─────────────────────────
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t dora-risk-scorer:${{ github.sha }} .
+
+      - name: Smoke test Docker image
+        run: |
+          docker run -d \
+            -e ANTHROPIC_API_KEY=dummy-key-for-build-test \
+            -p 8000:8000 \
+            --name dora-test \
+            dora-risk-scorer:${{ github.sha }}
+          sleep 8
+          # /health should return 200 even without a real API key
+          curl -f http://localhost:8000/health
+          docker stop dora-test

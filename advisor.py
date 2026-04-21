@@ -1,34 +1,36 @@
 """
 advisor.py — The LLM advisory layer.
 
-What this does:
-- Takes the ML risk score, risk factors, and DORA metrics
-- Asks the LLM to generate a natural-language deployment advisory
-- The advisory is actionable: not "risk is high" but "delay 2hrs until off-hours
-  and split this PR into smaller chunks next time"
+Swapped from Groq/langchain-groq to Anthropic Claude (claude-haiku-4-5).
+Same interface as before — generate_advisory() returns a plain string.
 
-Why Groq (same as Pipeline Analyzer)?
-- Free tier, fast inference, llama-3.3-70b is very capable for structured prompts
-- Same pattern as agent.py in Pipeline-Failure-Analyzer for consistency
+Why Claude instead of Groq?
+- You already have an Anthropic API key
+- claude-haiku-4-5 is fast and cheap — ideal for advisory text generation
+- Same separation of concerns: XGBoost does the numbers, Claude writes the words
 
-The LLM is NOT doing the risk scoring (that's XGBoost's job).
-The LLM is only translating the score + factors into human language.
-This avoids hallucination in the critical path — numbers come from code, 
-words come from the LLM.
+The rest of the codebase (main.py, scorer.py, dora.py, db.py, models.py) is unchanged.
 """
 
 import os
-import json
-from langchain_groq import ChatGroq
-from langchain_core.messages import HumanMessage
-
+import anthropic
 from models import DeploymentEvent, RiskFactor, DORAMetrics
 
-llm = ChatGroq(
-    model="llama-3.3-70b-versatile",
-    temperature=0,
-    api_key=os.getenv("GROQ_API_KEY")
-)
+# Lazy singleton — created on first call, reused after
+_client: anthropic.Anthropic | None = None
+
+
+def _get_client() -> anthropic.Anthropic:
+    global _client
+    if _client is None:
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "ANTHROPIC_API_KEY not set. "
+                "Add it to your .env file or environment."
+            )
+        _client = anthropic.Anthropic(api_key=api_key)
+    return _client
 
 
 def generate_advisory(
@@ -37,13 +39,14 @@ def generate_advisory(
     risk_level: str,
     risk_factors: list[RiskFactor],
     dora: DORAMetrics,
-    scoring_method: str
+    scoring_method: str,
 ) -> str:
     """
-    Generate a natural language advisory for this deployment.
+    Generate a natural-language deployment advisory using Claude.
 
-    Returns a concise advisory string — typically 3-5 sentences.
-    Falls back to a template string if LLM call fails.
+    Returns a concise advisory string (3-5 sentences).
+    Falls back to a template string if the API call fails — the
+    /score-deploy endpoint should never crash due to an LLM error.
     """
     factors_text = "\n".join(
         f"  - [{f.impact.upper()}] {f.factor}: {f.detail}"
@@ -76,22 +79,29 @@ Total Deploys Recorded: {dora.total_deploys_recorded}
 == Instructions ==
 - Be direct and specific. Mention actual numbers from the risk factors.
 - If risk is LOW: confirm it's safe to deploy and briefly note what looks good.
-- If risk is MEDIUM: suggest one concrete precaution (e.g., deploy during business hours, 
-  have rollback ready, monitor for 30min post-deploy).
-- If risk is HIGH/CRITICAL: explain the top 1-2 reasons clearly and suggest either 
-  splitting the PR, adding tests, or waiting for a safer window.
+- If risk is MEDIUM: suggest one concrete precaution (e.g., deploy during business hours,
+  have rollback ready, monitor for 30 min post-deploy).
+- If risk is HIGH/CRITICAL: explain the top 1-2 reasons clearly and suggest either
+  splitting the PR, adding tests, or waiting for a safer deployment window.
 - Keep it to 3-5 sentences maximum. No bullet points. Write as if talking to the developer.
-- Do NOT just repeat the risk level back to them. Give new information.
+- Do NOT just repeat the risk level back to them. Give new, actionable information.
 
-Return ONLY the advisory text. No JSON. No preamble."""
+Return ONLY the advisory text. No JSON. No preamble. No sign-off."""
 
     try:
-        response = llm.invoke([HumanMessage(content=prompt)])
-        return response.content.strip()
+        client = _get_client()
+        message = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return message.content[0].text.strip()
     except Exception as e:
-        # Graceful fallback — never crash the /score-deploy endpoint due to LLM error
+        # Graceful fallback — never crash /score-deploy because of an LLM failure
+        top_concern = risk_factors[0].detail if risk_factors else "None detected"
         return (
             f"Risk level: {risk_level} ({risk_score:.0%}). "
-            f"Top concern: {risk_factors[0].detail if risk_factors else 'None detected'}. "
-            f"LLM advisory unavailable ({str(e)[:60]}). Proceed based on risk score."
+            f"Top concern: {top_concern}. "
+            f"LLM advisory unavailable ({str(e)[:80]}). "
+            "Proceed based on the risk score and factors above."
         )
