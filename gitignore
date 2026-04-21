@@ -1,36 +1,5 @@
-# ── Python ──────────────────────────────────────────────
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-.Python
-
-# ── Virtual environments ─────────────────────────────────
-.venv/
 venv/
-env/
-ENV/
-
-# ── Environment / secrets ────────────────────────────────
-.env
-*.env
-
-# ── Database (auto-created by db.py) ────────────────────
+__pycache__/
+*.pyc
 *.db
-*.sqlite
-*.sqlite3
-data/
-
-# ── Docker ───────────────────────────────────────────────
-.docker/
-
-# ── IDE / editor ─────────────────────────────────────────
-.vscode/
-.idea/
-*.swp
-*.swo
-*.orig
-
-# ── OS ───────────────────────────────────────────────────
-.DS_Store
-Thumbs.db
+.env
